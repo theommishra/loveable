@@ -1,52 +1,70 @@
-require('dotenv').config();
+import 'dotenv/config';
+import express from 'express';
+import { GoogleGenAI } from "@google/genai";
+import { BASE_PROMPT, getSystemPrompt } from "./prompt";
+import { basePrompt as nodeBasePrompt } from "./defaults/node";
+import { basePrompt as reactBasePrompt } from "./defaults/react";
 
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY as string;
-
-
-import { GoogleGenAI } from "@google/genai";
-
 const ai = new GoogleGenAI({ apiKey: GEMINI_API_KEY });
+const app = express();
+app.use(express.json());
 
-async function main() {
-  const model = 'gemini-2.5-flash';
-  const prompt = 'Explain how the solar system formed in simple terms.';
+app.post('/template', async (req, res) => {
+  const prompt = req.body.prompt;
+  const response = await ai.models.generateContent({
+    model: "gemini-2.5-flash",
+    contents: [
+      { 
+        parts: [{ 
+          text: `IMPORTANT: You must respond with ONLY a single word: either "node" or "react". Do not return any code, files, explanations, or any other text. Just return the single word.
 
-  try {
-    console.log('Starting streaming response...\n');
-    
-    // Method 1: Using generateContentStream (streaming)
-    const responseStream = await ai.models.generateContentStream({
-      model: model,
-      contents: prompt,
-    });
+Based on this project, which should it be - node or react?
 
-    // Iterate over chunks as they arrive
-    for await (const chunk of responseStream) {
-      // Handle different chunk types
-      if (chunk.text) {
-        // Write text chunks directly to stdout for real-time display
-        process.stdout.write(chunk.text);
-      } else if (chunk.candidates && chunk.candidates[0]?.content?.parts) {
-        // Alternative: extract text from candidates structure
-        const text = chunk.candidates[0].content.parts
-          .map((part: any) => part.text)
-          .filter(Boolean)
-          .join('');
-        if (text) {
-          process.stdout.write(text);
-        }
+${prompt}` 
+        }], 
+        role: 'user' 
       }
-    }
-    
-    console.log('\n\n✅ Stream completed successfully!');
-
-  } catch (error) {
-    console.error('❌ Error during streaming:', error);
-    if (error instanceof Error) {
-      console.error('Error details:', error.message);
-    }
+    ],
+  });
+  const answer = (response.text || '').trim().toLowerCase();
+  console.log('API Response:', response.text);
+  console.log('Processed answer:', answer);
+  if (answer === "react") {
+    res.json({
+      prompts: [BASE_PROMPT, `Here is an artifact that contains all files of the project visible to you.\nConsider the contents of ALL files in the project.\n\n${reactBasePrompt}\n\nHere is a list of files that exist on the file system but are not being shown to you:\n\n  - .gitignore\n  - package-lock.json\n`],
+      uiPrompts: [reactBasePrompt]
+    })
+    return;
   }
-}
 
-main();
+  if (answer === "node") {
+    res.json({
+      prompts: [`Here is an artifact that contains all files of the project visible to you.\nConsider the contents of ALL files in the project.\n\n${nodeBasePrompt}\n\nHere is a list of files that exist on the file system but are not being shown to you:\n\n  - .gitignore\n  - package-lock.json\n`],
+      uiPrompts: [nodeBasePrompt]
+    })
+    return;
+  }
 
+  res.status(403).json({ message: "You cant access this" })
+  return;
+});
+
+app.post("/chat", async (req, res) => {
+  const messages = req.body.messages;
+  const response = await ai.models.generateContent({
+    model: "gemini-2.5-flash",
+    contents: [
+      { parts: [{ text: getSystemPrompt() }], role: 'model' },
+      { parts: [{ text: messages }], role: 'user' }
+    ],
+  })
+
+  console.log(response);
+
+  res.json({
+      response: response.text
+  });
+})
+
+app.listen(3001);
